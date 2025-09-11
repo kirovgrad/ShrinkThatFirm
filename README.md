@@ -1,6 +1,6 @@
 # ShrinkThatFirm
 
-## Feaures
+## Features
 
 A Python tool for analyzing a firmware file system in order to shrink it:
 - Find duplicated files;
@@ -14,6 +14,9 @@ For finding unused functions you have to run **unused_funcs_finder.py**, which u
 You can also run **ida_unused_funcs_script.py** as an idapython script right in IDA Pro itself, but before that in **ida_unused_funcs_script.py**:
 1) Comment lines 330 and 331;
 2) Comment lines from 358 to 364 and print the result of **unneeded_funcs** list.
+
+Script for searching unused functions is mostly suitable for binaries written in C. If some function in its sources is called with PRIVATE flag, it might be falsly identified as unused and all functions inside of it also. 
+Also, most compilers inline small functions, so they also might be falsly considered unused. You can uncomment filtering function and change the edge of minimum functions size as you wish. By default it is 140 bytes.
 
 ## Usage
 
