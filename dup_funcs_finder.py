@@ -1,12 +1,7 @@
 import os
 import sys
 import hashlib
-
-try:
-	import r2pipe
-except:
-	sys.path.insert(0, "/home/emin/.local/lib/python3.13/site-packages")
-	import r2pipe
+import r2pipe
 
 from collections import defaultdict
 from dataclasses import dataclass
@@ -138,4 +133,5 @@ def find_duplicated_functions(root_dir):
 	return total_wasted
 
 if __name__ == '__main__':
+
 	find_duplicated_functions(sys.argv[1])
