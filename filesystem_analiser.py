@@ -5,17 +5,11 @@ import hashlib
 import argparse
 import subprocess
 import concurrent.futures
+import lief
+import r2pipe
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import List, Dict, Set
-
-try:
-	import lief
-	import r2pipe
-except:
-	sys.path.insert(0, "/home/emin/.local/lib/python3.13/site-packages")
-	import lief
-	import r2pipe
 
 _STRINGCOLLECT = {}
 _PATTERN = re.compile(rb'[\x20-\x7E]{7,}')
@@ -721,4 +715,5 @@ def main():
 	# print(f"Summary:\n  - Total wasted memory in {args.root} filesystem is {total_wasted} bytes ({total_wasted / 1024:.2f} KB, {total_wasted / 1024 / 1024:.2f} MB)")
 
 if __name__ == '__main__':
+
 	main()
