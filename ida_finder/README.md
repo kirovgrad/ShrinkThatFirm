@@ -1,6 +1,4 @@
-# shrink-that-firm — rewritten dead-code finder
-
-Two phases instead of one, and two *scopes*.
+# ShrinkThatFirm — rewritten dead-code finder
 
 ## Context set vs. target set
 
