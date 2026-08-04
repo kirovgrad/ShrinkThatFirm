@@ -1,29 +1,109 @@
 # ShrinkThatFirm
 
-A from-scratch, more maintainable rewrite of the original firmware-shrinking
-analyzer. It finds the same four classes of waste, plus the IDA-based unused
-function analysis, without the original's sharp edges.
+ShrinkThatFirm analyzes extracted firmware filesystems to identify wasted space.
+It finds several types of shrinkable waste:
 
-## What changed
+- **Duplicate files** - identical files that appear multiple times
+- **Duplicate functions** - same function code compiled into multiple binaries
+- **Unused libraries** - shared libraries nothing links to
+- **Unused binaries** - executables nothing references
+- **Dead functions** - functions inside binaries that are never called (requires IDA Pro)
 
-| Concern | Original | Rewrite |
-| --- | --- | --- |
-| Intermediate CSV | files written to CWD then re-parsed by hand | in-memory typed records (`models.CollectedFile`) |
-| Shared state | global `utils._STRINGCOLLECT` mutated from `main.py` | explicit `StringIndex` object passed to finders |
-| `DT_NEEDED` parsing | external `readelf` + text parsing | pure-Python `elf.parse_needed_libraries` (no external binary, 32/64-bit, both endians) |
-| Shell usage | `grep ... | head -1` built via string interpolation | no shell; regex over the in-memory string index |
-| Exception handling | `except: pass` everywhere | narrow, logged handlers |
-| Path handling | `os.path` + `full_path.index(root)` | `pathlib` + `relative_to` |
-| Windows-only habits | `file.split("\\")[-1]` | `Path.name` |
-| Reports | hard-coded CWD filenames | configurable `--output-dir` (default `./reports`) |
-| Progress | ad-hoc `printProgressBar` | thread-safe `ProgressBar` (`stderr` logs keep it clean) |
-| Entry point | `python main.py <fsdir> <threads>` | `python -m stf <root> [options]` |
+## Two Analysis Modes
 
-## Layout
+This project provides two modes of analysis:
+
+### 1. Fast Static Analysis (`stf`)
+
+Quick analysis using only strings and ELF parsing. No disassembly required.
+
+**Usage:**
+```bash
+python -m stf <firmware_root> [-t THREADS] [-o OUTPUT_DIR] [options]
+```
+
+**Options:**
+- `firmware_root` - Path to the extracted firmware filesystem (required)
+- `-t, --threads N` - Worker threads (default: 8)
+- `-o, --output-dir PATH` - Where reports are written (default: ./reports)
+- `--min-string-len N` - Minimum string length to index (default: 7)
+- `--min-func-size N` - Minimum function size for duplicate detection (default: 100)
+- `--no-dup-funcs` - Skip radare2 duplicate function analysis
+- `-v, --verbose` - Enable debug logging
+
+**Example:**
+```bash
+python -m stf /path/to/firmware/extracted -t 4 -o my_reports
+```
+
+**Reports generated:**
+- `duplicated_files_report.txt`
+- `duplicated_functions_report.txt`
+- `unused_library_report.txt`
+- `unused_binary_report.txt`
+- `summary.txt`
+
+### 2. Precise Dead Function Analysis (`ida_finder`)
+
+Uses IDA Pro to disassemble binaries and find functions that are never called.
+More accurate than string-based analysis but requires IDA Pro 9+ and takes longer.
+
+**Usage:**
+```bash
+python -m ida_finder.driver <firmware_root> [TARGETS...] [options]
+```
+
+**Options:**
+- `firmware_root` - Path to the extracted firmware filesystem (required)
+- `TARGETS` - Directories or files to analyze; omit for the whole image
+- `-o, --outdir PATH` - Output directory (default: stf-out)
+- `-j, --jobs N` - Concurrent IDA workers (default: CPU cores / 2)
+- `-T, --target-path PATH` - Additional target path (repeatable)
+- `--all` - Analyze the whole image
+- `--timeout SECONDS` - Per-binary timeout (default: 1800)
+- `--ignore NAME` - Skip binaries with this basename
+- `--link-only` - Stop after building link graph (skip IDA disassembly)
+- `--include-dead-files` - Also analyze unreachable binaries
+- `--extra-root PATH` - Additional entry point path
+- `-v, --verbose` - Enable debug logging
+
+**Example:**
+```bash
+# Analyze just /usr/sbin in the firmware
+python -m ida_finder.driver /path/to/firmware /usr/sbin -o results
+
+# Quick link graph only (no IDA needed)
+python -m ida_finder.driver /path/to/firmware --link-only -o graph_out
+
+# Full image analysis with 4 workers
+python -m ida_finder.driver /path/to/firmware --all -j 4 -o full_scan
+```
+
+**Phase 1 - Link Graph (fast, no IDA):**
+Builds a complete picture of the firmware's dynamic linking by parsing all ELFs:
+- `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH` with `$ORIGIN`
+- Versioned `.dynsym` entries
+- IFUNCs and kernel module symbols
+
+Produces `scope.json`, `dead_files.json`, and `root_spec.json`.
+
+**Phase 2 - IDA Analysis (slow, requires IDA Pro):**
+Disassembles targeted binaries to find unreachable functions. Outputs per-binary JSON files with:
+- `live` - Functions reachable from entry points
+- `dead` - Functions with no references
+- `unreachable_but_address_taken` - Pointers exist but call site unresolvable
+- `dead_small` - Below size threshold, likely compiler artifacts
+
+**Generate human-readable report:**
+```bash
+python -m ida_finder.report results
+```
+
+## Project Layout
 
 ```
 ShrinkThatFirm/
-├── stf/                    # Basic firmware analysis CLI
+├── stf/                    # Fast static analysis
 │   ├── cli.py              # argument parsing + pipeline orchestration
 │   ├── config.py           # immutable per-run Config
 │   ├── models.py           # CollectedFile / FunctionGroup / UnusedEntry ...
@@ -45,124 +125,22 @@ ShrinkThatFirm/
 └── tests/                  # test suite
 ```
 
-## Basic Usage (stf/)
+## Installation
 
 ```bash
-python -m stf <fsdir> [-t THREADS] [-o REPORTS_DIR] [--no-dup-funcs]
+pip install -e .
 ```
 
-* `fsdir` — path to the extracted firmware filesystem (required).
-* `-t/--threads` — worker threads (default 8).
-* `-o/--output-dir` — where reports are written (default `./reports`).
-* `--no-dup-funcs` — skip the radare2 duplicate-function analysis.
-* `--min-func-size`, `--min-string-len` — analysis tuning knobs.
+**Optional dependencies:**
+- `r2pipe` - For duplicate function analysis (`pip install r2pipe`)
 
-Reports written: `duplicated_files_report.txt`, `duplicated_functions_report.txt`,
-`unused_library_report.txt`, `unused_binary_report.txt` and `summary.txt`.
+## Understanding the Results
 
-## IDA-Based Dead Code Analysis (ida_finder/)
+**Unused libraries/binaries** means nothing in the firmware references them. They can be deleted to save space. However:
+- A library may be loaded via `dlopen()` at runtime
+- Names in compressed data may be missed by string search
 
-The ida_finder module provides more precise dead function detection using IDA Pro.
-It operates in two phases with two scopes.
-
-### Context set vs. target set
-
-The link graph is always built over the **whole image**, because import
-resolution and `dlsym` evidence are only correct if every file is considered —
-a function in `/usr/lib/libfoo.so` may be reachable only from
-`/www/cgi-bin/status`. Narrowing the input would silently manufacture dead
-code.
-
-What you narrow is the **target set**: which binaries actually get
-disassembled and reported on.
-
-```bash
-python -m ida_finder.driver ROOT [TARGET ...]
-```
-
-* `ROOT` — the extracted filesystem. Always scanned in full.
-* `TARGET` — zero or more directories or files to check for dead code.
-  Omit for the whole image, or pass `--all` explicitly.
-
-Targets accept either form, so both of these work:
-
-```bash
-python -m ida_finder.driver /fw/squashfs-root /usr/sbin          # image-absolute
-python -m ida_finder.driver /fw/squashfs-root /fw/squashfs-root/usr/sbin
-```
-
-Multiple targets, mixing directories and single files:
-
-```bash
-python -m ida_finder.driver /fw/squashfs-root /usr/sbin /www/cgi-bin \
-       -T /lib/libvendor.so.1 -o out -j 8
-```
-
-A target that resolves outside `ROOT`, or matches no ELF files, is a hard
-error rather than a silent empty run.
-
-### Phase 1 — link graph (no IDA, seconds, exact)
-
-```bash
-python -m ida_finder.driver /path/to/rootfs /usr/sbin -o out --link-only
-```
-
-Parses every ELF in the image (32/64-bit, LE **and BE**) and resolves the real
-dynamic-linking graph: `DT_NEEDED`, `DT_SONAME`, `RPATH`/`RUNPATH` with
-`$ORIGIN`, versioned `.dynsym`, IFUNCs, `__ksymtab` for `.ko` files.
-
-Produces:
-
-* `scope.json` — what was context, what was target.
-* `dead_files.json` — whole binaries and libraries nothing references, each
-  flagged `in_scope`. Usually the single biggest size win in an image, and
-  provable without disassembly.
-* `root_spec.json` — one entry per ELF in the image, carrying `file_live`,
-  `in_scope`, and the exports that some other object actually has an
-  **undefined dynsym entry** for, with the evidence for each.
-
-### Phase 2 — intra-binary reachability (IDA 9 idalib)
-
-```bash
-python -m ida_finder.driver /path/to/rootfs /usr/sbin -o out -j 8 --timeout 900
-python -m ida_finder.report out
-```
-
-One IDA process per worker, one result file per binary, per-binary timeout.
-In-scope binaries that phase 1 proved unreachable are skipped — there is no
-point enumerating dead functions inside a file you can delete whole — unless
-you pass `--include-dead-files`.
-
-### Verdicts
-
-| verdict | meaning | action |
-|---|---|---|
-| `live` | reachable from a root | keep |
-| `dead` | no reference, or only from unreachable code | remove after spot-check |
-| `unreachable_but_address_taken` | pointer stored somewhere unresolvable | needs a trace |
-| `dead_small` | under `STF_MIN_FUNC_SIZE` | low value, elevated risk |
-
-### Running the IDA script by hand
-
-File > Script file..., with environment variables:
-
-* `STF_ROOT_SPEC` — path to `root_spec.json`
-* `STF_RESULT_JSON` — where to write this binary's result
-* `STF_MIN_FUNC_SIZE` — small-function threshold (default 0 = report everything)
-
-## Optional dependencies
-
-* `r2pipe` — required only for the duplicate-function analysis step
-  (`pip install r2pipe`); the other four steps run without it.
-* IDA Pro 9+ — required for the unused-function analysis via `ida_finder`
-
-## Notes on accuracy (inherited from the original design)
-
-The "unused" analyses are heuristics, not proofs:
-
-* a library may be `dlopen`ed at runtime; the string search tries to catch
-  that, but names in compressed/obfuscated data will be missed,
-* C functions invoked through function pointers that IDA cannot resolve may be
-  flagged unused (PRIVATE functions, inlined small functions), which is why the
-  small-function filter defaults to keeping functions under 140 bytes
-  (`STF_MIN_FUNC_SIZE`).
+**Dead functions** means IDA's disassembly shows no code path calls them. Before deleting:
+- Verify the binary isn't loaded via dlopen/dlsym
+- Check if function addresses are taken and called indirectly
+- Small functions (<100 bytes) are marked separately as likely compiler artifacts
